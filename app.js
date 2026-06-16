@@ -196,7 +196,11 @@ function supabaseHeaders(extra = {}) {
 }
 
 function supabaseRestUrl() {
-  const raw = String(state.supabase.url || "").trim().replace(/\/+$/, "");
+  let raw = String(state.supabase.url || "").trim().replace(/\/+$/, "");
+  if (!raw || raw.startsWith("/")) raw = initialState.supabase.url.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(raw)) {
+    throw new Error("Supabase API URL must start with https://");
+  }
   return raw.endsWith("/rest/v1") ? raw : `${raw}/rest/v1`;
 }
 
