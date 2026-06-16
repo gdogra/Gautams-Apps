@@ -33,7 +33,7 @@ Netlify should publish the repository root with no build command. The included `
 
 ## Supabase
 
-Project: Useful apps  
+Project: Gautam's Apps  
 Project ID: `pmyqsieamfohrywdpora`  
 Project URL: `https://pmyqsieamfohrywdpora.supabase.co`
 

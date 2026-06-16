@@ -1,5 +1,5 @@
--- Useful Apps Supabase setup
--- Project: Useful apps
+-- Gautam's Apps Supabase setup
+-- Project: Gautam's Apps
 -- Project ID: pmyqsieamfohrywdpora
 --
 -- This creates a single app-state table for the current local-first app.
