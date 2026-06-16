@@ -200,6 +200,8 @@
           <div class="split-layout">
             <form class="panel form-panel" id="expense-form">
               <h3>Request or record spend</h3>
+              <label>Vendor document<input name="documentFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt" /></label>
+              <div id="receipt-autofill-status" class="status-line">Upload a vendor invoice, quote, PO, or receipt to prefill this request.</div>
               <label>Project<select required name="projectId" id="expense-project"></select></label>
               <label>Vendor<input required name="vendor" list="vendor-suggestions" placeholder="Vendor or payee" /></label>
               <label>Amount<input required name="amount" type="number" min="0.01" step="0.01" /></label>
@@ -232,7 +234,6 @@
                   <option>Other</option>
                 </select>
               </label>
-              <label>Vendor document<input name="documentFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt" /></label>
               <label>Needed by<input name="neededBy" type="date" /></label>
               <label>Receipt reference<input name="receipt" placeholder="Receipt file or reference" /></label>
               <label>Purpose<textarea required name="purpose" rows="4" placeholder="Why this spend is needed"></textarea></label>
@@ -468,6 +469,6 @@
     <datalist id="vendor-suggestions"></datalist>
     <datalist id="customer-suggestions"></datalist>
     <datalist id="contributor-suggestions"></datalist>
-    <script src="app.js?v=20260616-expense-documents"></script>
+    <script src="app.js?v=20260616-receipt-autofill"></script>
   </body>
 </html>

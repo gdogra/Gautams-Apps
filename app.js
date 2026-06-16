@@ -662,6 +662,163 @@ function readExpenseDocument(file) {
   });
 }
 
+function canReadReceiptText(file) {
+  return Boolean(
+    file &&
+      (file.type.startsWith("text/") ||
+        /\.(csv|tsv|txt|md|json|html?)$/i.test(file.name))
+  );
+}
+
+async function readReceiptText(file) {
+  if (!canReadReceiptText(file)) return "";
+  const text = await file.text();
+  return text.slice(0, 25000);
+}
+
+function normalizeReceiptText(value) {
+  return String(value || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function filenameClues(file) {
+  return String(file?.name || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseReceiptDate(text) {
+  const compact = String(text || "");
+  const iso = compact.match(/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
+  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  const us = compact.match(/\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])[-/](20\d{2}|\d{2})\b/);
+  if (us) {
+    const year = Number(us[3]) < 100 ? 2000 + Number(us[3]) : Number(us[3]);
+    return `${year}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  }
+  const named = compact.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+([0-3]?\d),?\s+(20\d{2})\b/i);
+  if (!named) return "";
+  const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].findIndex((item) =>
+    named[1].toLowerCase().startsWith(item)
+  ) + 1;
+  return `${named[3]}-${String(month).padStart(2, "0")}-${String(named[2]).padStart(2, "0")}`;
+}
+
+function parseReceiptAmount(text) {
+  const lines = String(text || "").split("\n");
+  const priority = lines
+    .map((line) => {
+      const match = line.match(/\b(?:grand\s+total|amount\s+due|balance\s+due|total|paid)\b[^0-9$-]*\$?\s*([0-9][0-9,]*\.\d{2})/i);
+      return match ? Number(match[1].replace(/,/g, "")) : 0;
+    })
+    .filter((amount) => amount > 0);
+  if (priority.length) return priority[priority.length - 1];
+  const amounts = Array.from(String(text || "").matchAll(/\$?\s*([0-9][0-9,]*\.\d{2})\b/g))
+    .map((match) => Number(match[1].replace(/,/g, "")))
+    .filter((amount) => amount > 0);
+  return amounts.length ? Math.max(...amounts) : 0;
+}
+
+function parseReceiptReference(text) {
+  const match = String(text || "").match(/\b(?:invoice|inv|quote|estimate|po|purchase\s+order|order|receipt)\s*(?:#|no\.?|number|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i);
+  return match ? match[1].replace(/[.,;:]+$/, "") : "";
+}
+
+function inferDocumentType(text) {
+  if (/\b(purchase\s+order|po\s*#|po\s+number)\b/i.test(text)) return "Purchase order";
+  if (/\bquote|estimate\b/i.test(text)) return "Quote";
+  if (/\binvoice|inv\s*#\b/i.test(text)) return "Invoice";
+  if (/\breceipt\b/i.test(text)) return "Receipt";
+  return "";
+}
+
+function inferReceiptCategory(text) {
+  const value = String(text || "").toLowerCase();
+  const rules = [
+    ["Legal", /\b(legal|law|attorney|counsel|incorporat|registered agent|clerk)\b/],
+    ["Accounting", /\b(accounting|bookkeep|tax|quickbooks|payroll|cpa)\b/],
+    ["Marketing", /\b(marketing|ads?|google ads|facebook|linkedin|mailchimp|campaign|brand)\b/],
+    ["Contractor", /\b(contractor|consultant|freelance|upwork|fiverr|developer|designer)\b/],
+    ["Infrastructure", /\b(aws|amazon web services|supabase|netlify|vercel|cloudflare|domain|hosting|server|database|openai|api|github)\b/],
+    ["Software", /\b(software|subscription|saas|license|notion|figma|slack|zoom|microsoft|google workspace|adobe)\b/]
+  ];
+  return rules.find(([, pattern]) => pattern.test(value))?.[0] || "";
+}
+
+function inferReceiptVendor(text, file) {
+  const normalized = normalizeReceiptText(text);
+  const lower = normalized.toLowerCase();
+  const known = Object.values(state.formMemory.vendors || {}).find((memory) =>
+    memory.display && lower.includes(String(memory.display).toLowerCase())
+  );
+  if (known?.display) return known.display;
+  const line = normalized
+    .split("\n")
+    .map((item) => item.trim())
+    .find((item) =>
+      item.length >= 3 &&
+      item.length <= 60 &&
+      !/\b(receipt|invoice|quote|purchase order|date|total|amount|balance|paid|ship|bill)\b/i.test(item) &&
+      !/^\$?\d/.test(item)
+    );
+  if (line) return line.replace(/[|•]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return filenameClues(file)
+    .replace(/\b(20\d{2}[- ]?\d{1,2}[- ]?\d{1,2}|invoice|quote|receipt|po|paid|total|copy)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function setIfEmpty(field, value) {
+  if (value && !field.value) field.value = value;
+}
+
+async function autofillExpenseFromDocument(file) {
+  const form = $("#expense-form");
+  const status = $("#receipt-autofill-status");
+  if (!file) {
+    status.textContent = "Upload a vendor invoice, quote, PO, or receipt to prefill this request.";
+    return;
+  }
+  if (file.size > MAX_EXPENSE_DOCUMENT_BYTES) {
+    status.textContent = `Document is ${bytesLabel(file.size)}. Use a file under ${bytesLabel(MAX_EXPENSE_DOCUMENT_BYTES)}.`;
+    return;
+  }
+
+  const text = normalizeReceiptText(`${await readReceiptText(file)}\n${filenameClues(file)}`);
+  const inferred = {
+    vendor: inferReceiptVendor(text, file),
+    amount: parseReceiptAmount(text),
+    date: parseReceiptDate(text),
+    reference: parseReceiptReference(text),
+    documentType: inferDocumentType(text),
+    category: inferReceiptCategory(text)
+  };
+
+  setIfEmpty(form.elements.vendor, inferred.vendor);
+  if (inferred.vendor) applyVendorMemory(inferred.vendor);
+  setIfEmpty(form.elements.amount, inferred.amount ? inferred.amount.toFixed(2) : "");
+  setIfEmpty(form.elements.date, inferred.date);
+  setIfEmpty(form.elements.reference, inferred.reference);
+  if (inferred.documentType) form.elements.documentType.value = inferred.documentType;
+  if (inferred.category) form.elements.category.value = inferred.category;
+  if (!form.elements.purpose.value && inferred.vendor) {
+    form.elements.purpose.value = `${inferred.documentType || "Receipt"} from ${inferred.vendor}${inferred.reference ? ` (${inferred.reference})` : ""}.`;
+  }
+
+  const filled = Object.entries(inferred)
+    .filter(([, value]) => Boolean(value))
+    .map(([key]) => key)
+    .join(", ");
+  status.textContent = filled
+    ? `Autofilled from ${file.name}: ${filled}.`
+    : `Attached ${file.name}. I could not confidently infer fields from this file type.`;
+}
+
 function expenseDocumentLabel(expense) {
   if (!expense.reference && !expense.document?.name && !expense.documentType) return "";
   const type = expense.documentType || "Document";
@@ -1583,6 +1740,9 @@ function wireEvents() {
 
   $("#expense-form [name='vendor']").addEventListener("change", (event) => applyVendorMemory(event.target.value));
   $("#expense-form [name='vendor']").addEventListener("blur", (event) => applyVendorMemory(event.target.value));
+  $("#expense-form [name='documentFile']").addEventListener("change", (event) => {
+    autofillExpenseFromDocument(event.target.files[0]);
+  });
   $("#income-form [name='customer']").addEventListener("change", (event) => applyCustomerMemory(event.target.value));
   $("#income-form [name='customer']").addEventListener("blur", (event) => applyCustomerMemory(event.target.value));
   $("#income-form [name='date']").addEventListener("change", defaultInvoiceDueDate);
