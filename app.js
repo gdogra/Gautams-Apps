@@ -892,7 +892,7 @@ async function readPdfText(file) {
   for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 5); pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pageTexts.push(content.items.map((item) => item.str || "").join("\n"));
+    pageTexts.push(content.items.map((item) => item.str || "").join(" "));
   }
   return pageTexts.join("\n").slice(0, 25000);
 }
@@ -901,6 +901,7 @@ function normalizeReceiptText(value) {
   return String(value || "")
     .replace(/\r/g, "\n")
     .replace(/[ \t]+/g, " ")
+    .replace(/(\d)\s*\.\s*(\d{2})/g, "$1.$2")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -915,6 +916,16 @@ function filenameClues(file) {
 
 function looksLikeDocumentNumber(value) {
   return /^(inv|invoice|quote|estimate|po|receipt)?\s*[#-]?\s*\d{5,}$/i.test(String(value || "").trim());
+}
+
+function amountFromText(value) {
+  const match = String(value || "").match(/(?:\$|usd|us\$)?\s*([0-9][0-9,]*\.\d{2})\b/i);
+  return match ? Number(match[1].replace(/,/g, "")) : 0;
+}
+
+function plausibleAmount(value) {
+  const amount = Number(value) || 0;
+  return amount > 0 && amount < 100000;
 }
 
 function parseReceiptDate(text) {
@@ -936,21 +947,28 @@ function parseReceiptDate(text) {
 
 function parseReceiptAmount(text) {
   const lines = String(text || "").split("\n");
-  const priorityLabels = /\b(?:grand\s+total|amount\s+due|balance\s+due|invoice\s+total|total\s+due|total|paid)\b/i;
+  const priorityLabels = /\b(?:grand\s+total|amount\s+due|balance\s+due|invoice\s+total|total\s+due|amount\s+paid|payment|total|paid)\b/i;
   for (let index = 0; index < lines.length; index += 1) {
     if (!priorityLabels.test(lines[index])) continue;
-    const windowText = lines.slice(index, index + 3).join(" ");
-    const match = windowText.match(/\$?\s*([0-9][0-9,]*\.\d{2})\b/);
-    if (match) return Number(match[1].replace(/,/g, ""));
+    const windowText = lines.slice(index, index + 8).join(" ");
+    const amount = amountFromText(windowText);
+    if (plausibleAmount(amount)) return amount;
   }
-  const amounts = Array.from(String(text || "").matchAll(/\$?\s*([0-9][0-9,]*\.\d{2})\b/g))
+  const flatText = normalizeReceiptText(text).replace(/\n+/g, " ");
+  const flatPriority = flatText.match(/\b(?:grand\s+total|amount\s+due|balance\s+due|invoice\s+total|total\s+due|amount\s+paid|payment|total|paid)\b.{0,140}?(?:\$|usd|us\$)?\s*([0-9][0-9,]*\.\d{2})\b/i);
+  if (flatPriority) {
+    const amount = Number(flatPriority[1].replace(/,/g, ""));
+    if (plausibleAmount(amount)) return amount;
+  }
+  const amounts = Array.from(flatText.matchAll(/(?:\$|usd|us\$)?\s*([0-9][0-9,]*\.\d{2})\b/gi))
     .map((match) => Number(match[1].replace(/,/g, "")))
-    .filter((amount) => amount > 0);
+    .filter(plausibleAmount);
   return amounts.length ? Math.max(...amounts) : 0;
 }
 
 function parseReceiptReference(text) {
-  const match = String(text || "").match(/\b(?:invoice|inv|quote|estimate|po|purchase\s+order|order|receipt)\s*(?:#|no\.?|number|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i);
+  const matches = Array.from(String(text || "").matchAll(/\b(?:invoice|inv|quote|estimate|po|purchase\s+order|order|receipt)\s*(?:#|no\.?|number|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/gi));
+  const match = matches.find((item) => /\d/.test(item[1]));
   return match ? match[1].replace(/[.,;:]+$/, "") : "";
 }
 
@@ -961,10 +979,14 @@ function parseFilenameReference(file) {
   return looksLikeDocumentNumber(clue) ? clue.replace(/^(inv|invoice|quote|estimate|po|receipt)\s*/i, "") : "";
 }
 
-function inferDocumentType(text) {
-  if (/\b(purchase\s+order|po\s*#|po\s+number)\b/i.test(text)) return "Purchase order";
-  if (/\bquote|estimate\b/i.test(text)) return "Quote";
+function inferDocumentType(text, file) {
+  const clue = filenameClues(file);
+  if (/^(inv|invoice)\b/i.test(clue)) return "Invoice";
+  if (/^(quote|estimate)\b/i.test(clue)) return "Quote";
+  if (/^(po|purchase\s+order)\b/i.test(clue)) return "Purchase order";
   if (/\binvoice|inv\s*#\b/i.test(text)) return "Invoice";
+  if (/\bquote|estimate\b/i.test(text)) return "Quote";
+  if (/\b(purchase\s+order|po\s*#|po\s+number)\b/i.test(text)) return "Purchase order";
   if (/\breceipt\b/i.test(text)) return "Receipt";
   return "";
 }
@@ -973,11 +995,11 @@ function inferReceiptCategory(text) {
   const value = String(text || "").toLowerCase();
   const rules = [
     ["Legal", /\b(legal|law|attorney|counsel|incorporat|registered agent|clerk)\b/],
-    ["Accounting", /\b(accounting|bookkeep|tax|quickbooks|payroll|cpa)\b/],
     ["Marketing", /\b(marketing|ads?|google ads|facebook|linkedin|mailchimp|campaign|brand)\b/],
     ["Contractor", /\b(contractor|consultant|freelance|upwork|fiverr|developer|designer)\b/],
     ["Infrastructure", /\b(aws|amazon web services|supabase|netlify|vercel|cloudflare|domain|hosting|server|database|openai|api|github)\b/],
-    ["Software", /\b(software|subscription|saas|license|notion|figma|slack|zoom|microsoft|google workspace|adobe)\b/]
+    ["Software", /\b(software|subscription|saas|license|notion|figma|slack|zoom|microsoft|google workspace|adobe)\b/],
+    ["Accounting", /\b(accounting|bookkeep|tax|quickbooks|payroll|cpa)\b/]
   ];
   return rules.find(([, pattern]) => pattern.test(value))?.[0] || "";
 }
@@ -1043,7 +1065,7 @@ async function autofillExpenseFromDocument(file) {
     amount: parseReceiptAmount(text),
     date: parseReceiptDate(text),
     reference: parseReceiptReference(text) || parseFilenameReference(file),
-    documentType: inferDocumentType(text || filenameText),
+    documentType: inferDocumentType(text || filenameText, file),
     category: inferReceiptCategory(text)
   };
 
