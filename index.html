@@ -198,7 +198,7 @@
             <div id="import-summary" class="import-summary"></div>
           </section>
           <div class="split-layout">
-            <form class="panel form-panel" id="expense-form">
+            <form class="panel form-panel" id="expense-form" novalidate>
               <h3>Request or record spend</h3>
               <label>Vendor document<input name="documentFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt" /></label>
               <div id="receipt-autofill-status" class="status-line">Upload a vendor invoice, quote, PO, or receipt to prefill this request.</div>
@@ -469,6 +469,6 @@
     <datalist id="vendor-suggestions"></datalist>
     <datalist id="customer-suggestions"></datalist>
     <datalist id="contributor-suggestions"></datalist>
-    <script src="app.js?v=20260617-receipt-vendor-fix"></script>
+    <script src="app.js?v=20260617-approval-validation-fix"></script>
   </body>
 </html>

@@ -1052,6 +1052,29 @@ function setAutofillValue(field, value) {
   field.value = value;
 }
 
+function validateExpenseForm(form) {
+  const status = $("#receipt-autofill-status");
+  const required = [
+    ["projectId", "Choose an initiative."],
+    ["vendor", "Vendor is required before creating an approval request."],
+    ["amount", "Amount is required before creating an approval request."],
+    ["date", "Spend date is required before creating an approval request."],
+    ["purpose", "Purpose is required before creating an approval request."]
+  ];
+  const missing = required.find(([name]) => !String(form.elements[name].value || "").trim());
+  if (missing) {
+    status.textContent = missing[1];
+    form.elements[missing[0]].focus();
+    return false;
+  }
+  if (Number(form.elements.amount.value) <= 0) {
+    status.textContent = "Amount must be greater than zero.";
+    form.elements.amount.focus();
+    return false;
+  }
+  return true;
+}
+
 async function autofillExpenseFromDocument(file) {
   const form = $("#expense-form");
   const status = $("#receipt-autofill-status");
@@ -1930,6 +1953,7 @@ function wireEvents() {
   $("#expense-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!validateExpenseForm(form)) return;
     const data = formData(form);
     const documentFile = form.elements.documentFile.files[0];
     delete data.documentFile;
@@ -1950,6 +1974,7 @@ function wireEvents() {
     state.activeProjectId = data.projectId;
     rememberVendor(data);
     addAudit("Spend requested", `${money(data.amount)} requested for ${data.vendor} on ${projectName(data.projectId)}.`, data.projectId);
+    $("#receipt-autofill-status").textContent = `Approval request created for ${data.vendor} at ${money(data.amount)}.`;
     saveState();
     event.currentTarget.reset();
     setTodayDefaults();
