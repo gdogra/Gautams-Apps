@@ -870,9 +870,31 @@ function canReadReceiptText(file) {
 }
 
 async function readReceiptText(file) {
+  if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") return readPdfText(file);
   if (!canReadReceiptText(file)) return "";
   const text = await file.text();
   return text.slice(0, 25000);
+}
+
+async function loadPdfJs() {
+  if (window.pdfjsLib?.getDocument) return window.pdfjsLib;
+  const pdfjs = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
+  window.pdfjsLib = pdfjs;
+  return pdfjs;
+}
+
+async function readPdfText(file) {
+  const pdfjs = await loadPdfJs();
+  if (!pdfjs?.getDocument) return "";
+  pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pageTexts = [];
+  for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 5); pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pageTexts.push(content.items.map((item) => item.str || "").join("\n"));
+  }
+  return pageTexts.join("\n").slice(0, 25000);
 }
 
 function normalizeReceiptText(value) {
@@ -889,6 +911,10 @@ function filenameClues(file) {
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function looksLikeDocumentNumber(value) {
+  return /^(inv|invoice|quote|estimate|po|receipt)?\s*[#-]?\s*\d{5,}$/i.test(String(value || "").trim());
 }
 
 function parseReceiptDate(text) {
@@ -910,13 +936,13 @@ function parseReceiptDate(text) {
 
 function parseReceiptAmount(text) {
   const lines = String(text || "").split("\n");
-  const priority = lines
-    .map((line) => {
-      const match = line.match(/\b(?:grand\s+total|amount\s+due|balance\s+due|total|paid)\b[^0-9$-]*\$?\s*([0-9][0-9,]*\.\d{2})/i);
-      return match ? Number(match[1].replace(/,/g, "")) : 0;
-    })
-    .filter((amount) => amount > 0);
-  if (priority.length) return priority[priority.length - 1];
+  const priorityLabels = /\b(?:grand\s+total|amount\s+due|balance\s+due|invoice\s+total|total\s+due|total|paid)\b/i;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!priorityLabels.test(lines[index])) continue;
+    const windowText = lines.slice(index, index + 3).join(" ");
+    const match = windowText.match(/\$?\s*([0-9][0-9,]*\.\d{2})\b/);
+    if (match) return Number(match[1].replace(/,/g, ""));
+  }
   const amounts = Array.from(String(text || "").matchAll(/\$?\s*([0-9][0-9,]*\.\d{2})\b/g))
     .map((match) => Number(match[1].replace(/,/g, "")))
     .filter((amount) => amount > 0);
@@ -926,6 +952,13 @@ function parseReceiptAmount(text) {
 function parseReceiptReference(text) {
   const match = String(text || "").match(/\b(?:invoice|inv|quote|estimate|po|purchase\s+order|order|receipt)\s*(?:#|no\.?|number|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i);
   return match ? match[1].replace(/[.,;:]+$/, "") : "";
+}
+
+function parseFilenameReference(file) {
+  const clue = filenameClues(file);
+  const match = clue.match(/\b(?:inv|invoice|quote|estimate|po|receipt)\s*([A-Z0-9._/-]{3,})\b/i);
+  if (match) return match[1].replace(/[.,;:]+$/, "");
+  return looksLikeDocumentNumber(clue) ? clue.replace(/^(inv|invoice|quote|estimate|po|receipt)\s*/i, "") : "";
 }
 
 function inferDocumentType(text) {
@@ -956,24 +989,31 @@ function inferReceiptVendor(text, file) {
     memory.display && lower.includes(String(memory.display).toLowerCase())
   );
   if (known?.display) return known.display;
-  const line = normalized
+  const vendorLabel = normalized.match(/\b(?:vendor|merchant|supplier|seller|from|billed\s+by)\s*[:\-]\s*([^\n]{3,80})/i);
+  if (vendorLabel && !looksLikeDocumentNumber(vendorLabel[1])) return vendorLabel[1].trim();
+  const lines = normalized
     .split("\n")
-    .map((item) => item.trim())
-    .find((item) =>
+    .map((item) => item.trim().replace(/\s{2,}/g, " "))
+    .filter(Boolean);
+  const line = lines.find((item, index) =>
       item.length >= 3 &&
       item.length <= 60 &&
       !/\b(receipt|invoice|quote|purchase order|date|total|amount|balance|paid|ship|bill)\b/i.test(item) &&
-      !/^\$?\d/.test(item)
+      !/^\$?\d/.test(item) &&
+      !looksLikeDocumentNumber(item) &&
+      index < 12
     );
   if (line) return line.replace(/[|•]+/g, " ").replace(/\s{2,}/g, " ").trim();
-  return filenameClues(file)
-    .replace(/\b(20\d{2}[- ]?\d{1,2}[- ]?\d{1,2}|invoice|quote|receipt|po|paid|total|copy)\b/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return "";
 }
 
 function setIfEmpty(field, value) {
   if (value && !field.value) field.value = value;
+}
+
+function setAutofillValue(field, value) {
+  if (!value) return;
+  field.value = value;
 }
 
 async function autofillExpenseFromDocument(file) {
@@ -988,24 +1028,35 @@ async function autofillExpenseFromDocument(file) {
     return;
   }
 
-  const text = normalizeReceiptText(`${await readReceiptText(file)}\n${filenameClues(file)}`);
+  status.textContent = `Reading ${file.name}...`;
+  let receiptText = "";
+  let extractionError = "";
+  try {
+    receiptText = normalizeReceiptText(await readReceiptText(file));
+  } catch (error) {
+    extractionError = error.message;
+  }
+  const filenameText = filenameClues(file);
+  const text = normalizeReceiptText(receiptText);
   const inferred = {
     vendor: inferReceiptVendor(text, file),
     amount: parseReceiptAmount(text),
     date: parseReceiptDate(text),
-    reference: parseReceiptReference(text),
-    documentType: inferDocumentType(text),
+    reference: parseReceiptReference(text) || parseFilenameReference(file),
+    documentType: inferDocumentType(text || filenameText),
     category: inferReceiptCategory(text)
   };
 
-  setIfEmpty(form.elements.vendor, inferred.vendor);
+  setAutofillValue(form.elements.vendor, inferred.vendor);
   if (inferred.vendor) applyVendorMemory(inferred.vendor);
-  setIfEmpty(form.elements.amount, inferred.amount ? inferred.amount.toFixed(2) : "");
-  setIfEmpty(form.elements.date, inferred.date);
-  setIfEmpty(form.elements.reference, inferred.reference);
+  setAutofillValue(form.elements.amount, inferred.amount ? inferred.amount.toFixed(2) : "");
+  setAutofillValue(form.elements.date, inferred.date);
+  setAutofillValue(form.elements.reference, inferred.reference);
   if (inferred.documentType) form.elements.documentType.value = inferred.documentType;
   if (inferred.category) form.elements.category.value = inferred.category;
-  if (!form.elements.purpose.value && inferred.vendor) {
+  if (!inferred.date && form.elements.date.value === todayIso()) form.elements.date.value = "";
+  if (!inferred.vendor && looksLikeDocumentNumber(form.elements.vendor.value)) form.elements.vendor.value = "";
+  if (inferred.vendor) {
     form.elements.purpose.value = `${inferred.documentType || "Receipt"} from ${inferred.vendor}${inferred.reference ? ` (${inferred.reference})` : ""}.`;
   }
 
@@ -1014,8 +1065,8 @@ async function autofillExpenseFromDocument(file) {
     .map(([key]) => key)
     .join(", ");
   status.textContent = filled
-    ? `Autofilled from ${file.name}: ${filled}.`
-    : `Attached ${file.name}. I could not confidently infer fields from this file type.`;
+    ? `Autofilled from ${file.name}: ${filled}.${extractionError ? ` PDF text extraction warning: ${extractionError}` : ""}`
+    : `Attached ${file.name}. I could not confidently infer fields from this file.${extractionError ? ` PDF text extraction failed: ${extractionError}` : " If this is a scanned PDF/image, OCR is the next step."}`;
 }
 
 function expenseDocumentLabel(expense) {
