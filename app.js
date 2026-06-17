@@ -126,6 +126,7 @@ const initialState = {
 
 let state = loadState();
 let supabaseSyncTimer = null;
+let isLoadingRemoteState = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -214,18 +215,184 @@ function supabaseRestUrl() {
   return raw.endsWith("/rest/v1") ? raw : `${raw}/rest/v1`;
 }
 
-function sanitizedRemoteState() {
-  const clone = structuredClone(state);
-  if (clone.supabase) clone.supabase.anonKey = "";
-  return clone;
-}
-
 function scheduleSupabaseSync() {
-  if (!supabaseReady()) return;
+  if (!supabaseReady() || isLoadingRemoteState) return;
   window.clearTimeout(supabaseSyncTimer);
   supabaseSyncTimer = window.setTimeout(() => {
     pushStateToSupabase({ quiet: true });
   }, 900);
+}
+
+function supabaseSchemaHint(message) {
+  const text = String(message || "");
+  return /PGRST205|Could not find the table|schema cache|relation/i.test(text)
+    ? " Run gautams-apps-production-schema.sql in Supabase first."
+    : "";
+}
+
+async function supabaseRequest(path, options = {}) {
+  const response = await fetch(`${supabaseRestUrl()}${path}`, {
+    ...options,
+    headers: supabaseHeaders(options.headers || {})
+  });
+  if (!response.ok) throw new Error(await response.text());
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function rowData(row) {
+  return row?.data || row || {};
+}
+
+function settingsRows() {
+  return [
+    { key: "company", data: state.company, updated_at: new Date().toISOString() },
+    { key: "partners", data: state.partners, updated_at: new Date().toISOString() },
+    { key: "form_memory", data: state.formMemory, updated_at: new Date().toISOString() },
+    {
+      key: "runtime",
+      data: {
+        activeUserId: state.activeUserId,
+        activeProjectId: state.activeProjectId,
+        supabase: { ...state.supabase, anonKey: "" }
+      },
+      updated_at: new Date().toISOString()
+    }
+  ];
+}
+
+function projectRows() {
+  return state.projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    org: project.org || project.owner || APP_NAME,
+    owner: project.owner || "",
+    url: project.url || "",
+    status: project.status || "",
+    hourly_rate: Number(project.rate) || 0,
+    budget: Number(project.budget) || 0,
+    priority: Number(project.priority) || 0,
+    planned_share: Number(project.plannedShare) || 0,
+    allowed_viewers: project.allowedViewers || [],
+    data: project,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+function userRows() {
+  return state.users.map((user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    orgs: user.orgs || [],
+    data: user,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+function timeRows() {
+  return state.timeEntries.map((entry) => ({
+    id: entry.id,
+    project_id: entry.projectId,
+    work_date: entry.date,
+    hours: Number(entry.hours) || 0,
+    hourly_rate: Number(entry.rate) || 0,
+    contributor: entry.contributor || state.company.ceo,
+    notes: entry.notes || "",
+    data: entry,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+function expenseRows() {
+  return state.expenses.map((expense) => {
+    const data = { ...expense };
+    if (data.document) delete data.document;
+    return {
+      id: expense.id,
+      project_id: expense.projectId,
+      spend_date: expense.date,
+      vendor: expense.vendor,
+      amount: Number(expense.amount) || 0,
+      category: expense.category || "",
+      payment_source: expense.source || "",
+      document_type: expense.documentType || "",
+      reference: expense.reference || "",
+      receipt: expense.receipt || "",
+      purpose: expense.purpose || "",
+      approval_status: approvalStatus(expense),
+      document_id: expense.document?.id || null,
+      data,
+      updated_at: new Date().toISOString()
+    };
+  });
+}
+
+function expenseDocumentRows() {
+  return state.expenses
+    .filter((expense) => expense.document?.id)
+    .map((expense) => ({
+      id: expense.document.id,
+      expense_id: expense.id,
+      file_name: expense.document.name || "expense-document",
+      mime_type: expense.document.type || "application/octet-stream",
+      byte_size: Number(expense.document.size) || 0,
+      data: expense.document,
+      updated_at: new Date().toISOString()
+    }));
+}
+
+function incomeRows() {
+  return state.income.map((entry) => ({
+    id: entry.id,
+    project_id: entry.projectId,
+    invoice_date: entry.date,
+    due_date: entry.dueDate || null,
+    invoice_number: entry.invoiceNumber || "",
+    customer: entry.customer,
+    plan: entry.plan || "",
+    amount: Number(entry.amount) || 0,
+    status: entry.status || "",
+    data: entry,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+function fundRows() {
+  return state.funds.map((entry) => ({
+    id: entry.id,
+    project_id: entry.projectId,
+    fund_date: entry.date,
+    contributor: entry.contributor,
+    type: entry.type || "",
+    amount: Number(entry.amount) || 0,
+    reference: entry.reference || "",
+    data: entry,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+function auditRows() {
+  return state.audit.map((entry) => ({
+    id: entry.id,
+    project_id: entry.projectId || null,
+    occurred_at: entry.at || entry.date || new Date().toISOString(),
+    actor: entry.actor || state.company.ceo,
+    action: entry.action,
+    detail: entry.detail || "",
+    data: entry,
+    updated_at: new Date().toISOString()
+  }));
+}
+
+async function upsertRows(table, rows) {
+  if (!rows.length) return;
+  await supabaseRequest(`/${table}`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify(rows)
+  });
 }
 
 async function pushStateToSupabase({ quiet = false } = {}) {
@@ -234,21 +401,21 @@ async function pushStateToSupabase({ quiet = false } = {}) {
     return;
   }
   try {
-    const response = await fetch(`${supabaseRestUrl()}/useful_apps_state`, {
-      method: "POST",
-      headers: supabaseHeaders({ Prefer: "resolution=merge-duplicates" }),
-      body: JSON.stringify({
-        id: "default",
-        data: sanitizedRemoteState(),
-        updated_at: new Date().toISOString()
-      })
-    });
-    if (!response.ok) throw new Error(await response.text());
+    await upsertRows("app_settings", settingsRows());
+    await upsertRows("app_users", userRows());
+    await upsertRows("initiatives", projectRows());
+    await upsertRows("time_entries", timeRows());
+    await upsertRows("expenses", expenseRows());
+    await upsertRows("expense_documents", expenseDocumentRows());
+    await upsertRows("income_entries", incomeRows());
+    await upsertRows("fund_entries", fundRows());
+    await upsertRows("audit_events", auditRows());
     state.supabase.lastSync = new Date().toISOString();
-    setSupabaseStatus(`Synced to Supabase at ${new Date(state.supabase.lastSync).toLocaleString()}`);
+    setSupabaseStatus(`Synced table-backed DB at ${new Date(state.supabase.lastSync).toLocaleString()}`);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
-    if (!quiet) setSupabaseStatus(`Supabase push failed: ${error.message}`);
+    const hint = supabaseSchemaHint(error.message);
+    if (!quiet) setSupabaseStatus(`Supabase table push failed: ${error.message}${hint}`);
   }
 }
 
@@ -258,29 +425,61 @@ async function loadStateFromSupabase() {
     return;
   }
   try {
-    const response = await fetch(`${supabaseRestUrl()}/useful_apps_state?id=eq.default&select=data,updated_at`, {
-      headers: supabaseHeaders()
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const rows = await response.json();
-    if (!rows.length) {
-      setSupabaseStatus("No Supabase state found yet. Push current app state first.");
+    const localSupabase = structuredClone(state.supabase);
+    const [settings, users, projects, timeEntries, documents, expenses, income, funds, audit] = await Promise.all([
+      supabaseRequest("/app_settings?select=key,data,updated_at"),
+      supabaseRequest("/app_users?select=data"),
+      supabaseRequest("/initiatives?select=data&order=priority.asc"),
+      supabaseRequest("/time_entries?select=data&order=work_date.desc"),
+      supabaseRequest("/expense_documents?select=id,data"),
+      supabaseRequest("/expenses?select=data,document_id&order=spend_date.desc"),
+      supabaseRequest("/income_entries?select=data&order=invoice_date.desc"),
+      supabaseRequest("/fund_entries?select=data&order=fund_date.desc"),
+      supabaseRequest("/audit_events?select=data&order=occurred_at.desc")
+    ]);
+
+    if (!projects.length && !expenses.length && !timeEntries.length) {
+      setSupabaseStatus("No table-backed records found yet. Push current app state first.");
       return;
     }
-    const localSupabase = structuredClone(state.supabase);
+
+    const settingsByKey = Object.fromEntries(settings.map((row) => [row.key, row.data]));
+    const documentsById = Object.fromEntries(documents.map((row) => [row.id, rowData(row)]));
+    isLoadingRemoteState = true;
     state = migrateAppName({
       ...structuredClone(initialState),
-      ...rows[0].data,
+      company: { ...initialState.company, ...(settingsByKey.company || {}) },
+      partners: { ...initialState.partners, ...(settingsByKey.partners || {}) },
+      formMemory: { ...initialState.formMemory, ...(settingsByKey.form_memory || {}) },
+      users: users.map(rowData),
+      projects: normalizeProjects(projects.map(rowData)),
+      timeEntries: timeEntries.map(rowData),
+      expenses: expenses.map((row) => {
+        const entry = rowData(row);
+        const documentId = row.document_id || entry.document?.id;
+        return {
+          ...entry,
+          document: documentId ? documentsById[documentId] || entry.document || null : entry.document || null
+        };
+      }),
+      income: income.map(rowData),
+      funds: funds.map(rowData),
+      audit: audit.map(rowData),
+      activeUserId: settingsByKey.runtime?.activeUserId || state.activeUserId,
+      activeProjectId: settingsByKey.runtime?.activeProjectId || state.activeProjectId,
       supabase: {
         ...localSupabase,
-        lastSync: rows[0].updated_at,
-        lastStatus: `Loaded from Supabase at ${new Date().toLocaleString()}`
+        lastSync: new Date().toISOString(),
+        lastStatus: `Loaded table-backed DB at ${new Date().toLocaleString()}`
       }
     });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    isLoadingRemoteState = false;
     renderAll();
   } catch (error) {
-    setSupabaseStatus(`Supabase load failed: ${error.message}`);
+    isLoadingRemoteState = false;
+    const hint = supabaseSchemaHint(error.message);
+    setSupabaseStatus(`Supabase table load failed: ${error.message}${hint}`);
   }
 }
 
