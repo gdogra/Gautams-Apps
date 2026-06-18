@@ -1181,6 +1181,12 @@ function expenseDocumentHtml(expense) {
   return htmlEscape(label || expense.receipt || "");
 }
 
+function receiptStatus(expense) {
+  if (expense.receipt) return expense.receipt;
+  if (expense.document?.name || expenseDocumentLabel(expense)) return "Receipt received";
+  return "Pending receipt";
+}
+
 function nextInvoiceNumber() {
   const prefix = state.company.invoicePrefix || "INV";
   return `${prefix}-${String(state.company.nextInvoiceNumber || 1).padStart(4, "0")}`;
@@ -1271,7 +1277,7 @@ function renderControlChecks() {
   const ids = new Set(scopedProjectIds());
   const expenses = state.expenses.filter((expense) => ids.has(expense.projectId));
   const pending = expenses.filter((expense) => approvalStatus(expense) === "Pending");
-  const missingReceipts = expenses.filter((expense) => !expense.receipt);
+  const missingReceipts = expenses.filter((expense) => receiptStatus(expense) === "Pending receipt");
   const overdueInvoices = openIncomeEntries(state.income.filter((entry) => ids.has(entry.projectId))).filter(isOverdue);
   const overBudget = visibleProjects().filter((project) => {
     if (!ids.has(project.id)) return false;
@@ -1432,7 +1438,7 @@ function renderApprovals() {
               <div class="approval-person">
                 <strong>Documentation</strong>
                 <span class="status-line">${htmlEscape(expenseDocumentLabel(expense) || "No invoice, quote, or PO reference")}</span>
-                <span class="status-line">${htmlEscape(expense.receipt || "No receipt reference yet")}</span>
+                <span class="status-line">${htmlEscape(receiptStatus(expense))}</span>
                 <span class="status-line">${htmlEscape(expense.source)}</span>
               </div>
             </div>
@@ -1477,7 +1483,7 @@ function renderReport() {
       <article class="metric"><span>Open A/R</span><strong>${money(open)}</strong><p>${openIncomeEntries(data.income).filter(isOverdue).length} overdue</p></article>
     </div>
     ${reportTable("Time records", ["Date", "Project", "Hours", "Rate", "Value", "Work"], data.timeEntries.map((entry) => [shortDate(entry.date), projectName(entry.projectId), Number(entry.hours).toFixed(2), money(entry.rate), money(Number(entry.hours) * Number(entry.rate)), entry.notes]))}
-    ${reportTable("Expenses and receipts", ["Date", "Project", "Vendor", "Amount", "Document", "Receipt", "Approval"], data.expenses.map((entry) => [shortDate(entry.date), projectName(entry.projectId), entry.vendor, money(entry.amount), expenseDocumentLabel(entry), entry.receipt || "Pending receipt", approvalStatus(entry)]))}
+    ${reportTable("Expenses and receipts", ["Date", "Project", "Vendor", "Amount", "Document", "Receipt", "Approval"], data.expenses.map((entry) => [shortDate(entry.date), projectName(entry.projectId), entry.vendor, money(entry.amount), expenseDocumentLabel(entry), receiptStatus(entry), approvalStatus(entry)]))}
     ${reportTable("Fund infusions", ["Date", "Project", "Contributor", "Type", "Amount", "Reference"], data.funds.map((entry) => [shortDate(entry.date), projectName(entry.projectId), entry.contributor, entry.type, money(entry.amount), entry.reference || ""]))}
     ${reportTable("Invoices and payments", ["Date", "Due", "Project", "Invoice", "Customer", "Plan", "Amount", "Status"], data.income.map((entry) => [shortDate(entry.date), shortDate(entry.dueDate), projectName(entry.projectId), entry.invoiceNumber || "", entry.customer, entry.plan, money(entry.amount), isOverdue(entry) ? "Overdue" : entry.status]))}
   `;
@@ -1492,7 +1498,7 @@ function renderMonthlyReports(data) {
     months[key].count += 1;
     if (expense.projected || expense.recurring) months[key].recurring += Number(expense.amount);
     else months[key].actual += Number(expense.amount);
-    if (!expense.receipt) months[key].missingReceipts += 1;
+    if (receiptStatus(expense) === "Pending receipt") months[key].missingReceipts += 1;
   });
 
   const rows = Object.entries(months)
