@@ -60,15 +60,22 @@ button {
 }
 
 .brand-mark {
-  width: 44px;
-  height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: #0f766e;
-  font-weight: 800;
-  letter-spacing: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 30px rgba(3, 9, 18, 0.26);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.brand-logo {
+  display: block;
+  width: 52px;
+  height: 52px;
 }
 
 .brand-block h1,
