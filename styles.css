@@ -416,6 +416,46 @@ textarea {
   min-height: 42px;
 }
 
+.number-stepper {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.number-stepper input {
+  border-radius: 0;
+  text-align: center;
+}
+
+.number-stepper button {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.number-stepper button:first-child {
+  border-radius: 8px 0 0 8px;
+  border-right: 0;
+}
+
+.number-stepper button:last-child {
+  border-radius: 0 8px 8px 0;
+  border-left: 0;
+}
+
+.number-stepper button:hover {
+  background: #e8f3f1;
+  color: var(--accent-strong);
+}
+
+.number-stepper button:focus-visible {
+  outline: 3px solid rgba(47, 125, 115, 0.24);
+  outline-offset: 2px;
+}
+
 textarea {
   resize: vertical;
 }

@@ -169,8 +169,20 @@
               <h3>Record founder hours</h3>
               <label>Project<select required name="projectId" id="time-project"></select></label>
               <label>Date<input required name="date" type="date" min="2026-03-01" /></label>
-              <label>Hours<input required name="hours" type="number" min="0.25" step="0.25" placeholder="2.5" /></label>
-              <label>Hourly rate<input required name="rate" type="number" min="0" step="1" /></label>
+              <label>Hours
+                <span class="number-stepper" data-stepper="hours">
+                  <button type="button" data-step="-0.25" aria-label="Decrease hours">-</button>
+                  <input required name="hours" type="number" min="0.25" step="0.25" placeholder="2.5" />
+                  <button type="button" data-step="0.25" aria-label="Increase hours">+</button>
+                </span>
+              </label>
+              <label>Hourly rate
+                <span class="number-stepper" data-stepper="rate">
+                  <button type="button" data-step="-5" aria-label="Decrease hourly rate">-</button>
+                  <input required name="rate" type="number" min="0" step="5" />
+                  <button type="button" data-step="5" aria-label="Increase hourly rate">+</button>
+                </span>
+              </label>
               <label>Work performed<textarea required name="notes" rows="4" placeholder="Describe the work completed"></textarea></label>
               <button class="primary-button" type="submit">Save time</button>
             </form>
@@ -506,6 +518,6 @@
     <datalist id="vendor-suggestions"></datalist>
     <datalist id="customer-suggestions"></datalist>
     <datalist id="contributor-suggestions"></datalist>
-    <script src="app.js?v=20260618-report-controls"></script>
+    <script src="app.js?v=20260622-time-stepper"></script>
   </body>
 </html>

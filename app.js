@@ -2059,10 +2059,24 @@ function exportJson() {
 
 function setTodayDefaults() {
   const today = new Date().toISOString().slice(0, 10);
+  const timeDate = $("#time-form [name='date']");
+  if (timeDate) timeDate.value = today;
   $$('input[type="date"]').forEach((input) => {
-    if (!input.value) input.value = input.min || today;
+    if (!input.value) input.value = today;
   });
   $("#report-to").value = today;
+}
+
+function adjustNumberInput(input, delta) {
+  const step = Number(input.step) || 1;
+  const min = input.min === "" ? -Infinity : Number(input.min);
+  const max = input.max === "" ? Infinity : Number(input.max);
+  const current = input.value === "" ? 0 : Number(input.value);
+  const next = Math.min(max, Math.max(min, current + delta));
+  const decimals = String(step).includes(".") ? String(step).split(".")[1].length : 0;
+  input.value = next.toFixed(decimals);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function wireEvents() {
@@ -2073,6 +2087,14 @@ function wireEvents() {
       button.classList.add("active");
       $(`#${button.dataset.view}-view`).classList.add("active");
       $("#view-title").textContent = button.textContent;
+    });
+  });
+
+  $$(".number-stepper button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = button.parentElement?.querySelector("input");
+      if (!input) return;
+      adjustNumberInput(input, Number(button.dataset.step) || 0);
     });
   });
 
